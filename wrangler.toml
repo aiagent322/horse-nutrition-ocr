@@ -1,0 +1,8 @@
+name = "horse-nutrition-ocr"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+account_id = "be3392b6f5b8a1eb187da0577987a019"
+
+[vars]
+# ANTHROPIC_API_KEY is set via: wrangler secret put ANTHROPIC_API_KEY
+# Do NOT put the actual key here
