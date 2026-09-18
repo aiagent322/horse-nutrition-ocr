@@ -1,50 +1,91 @@
 /**
  * HorseNutritionGuide.com — Cloudflare Worker
- * Proxies vision OCR requests to Anthropic API
- * Keeps the API key server-side and adds image resizing
+ * Proxies vision OCR requests to the Anthropic API.
+ * Keeps the API key server-side; rate limiting via Cloudflare Rate Limiter.
  *
- * Deploy: wrangler deploy
+ * Deploy:     wrangler deploy
  * Set secret: wrangler secret put ANTHROPIC_API_KEY
+ *
+ * Bindings (configured in Cloudflare, must not be dropped on deploy):
+ *   ANTHROPIC_API_KEY  secret_text
+ *   OCR_RATE_LIMITER   ratelimit — 5 requests / 60s, keyed on client IP
  */
+
+const ALLOWED_ORIGINS = new Set([
+  'https://horsenutritionguide.com',
+  'https://www.horsenutritionguide.com',
+  'https://horsenutritionguide.pages.dev',
+]);
+
+// Cloudflare Pages issues per-deployment preview URLs of the form
+// <hash>.horsenutritionguide.pages.dev — allow those too.
+function isAllowedOrigin(origin) {
+  return ALLOWED_ORIGINS.has(origin)
+    || (origin && origin.endsWith('.horsenutritionguide.pages.dev'));
+}
+
+// CORS constrains browsers only — a scripted client bypasses it by omitting
+// the Origin header. Abuse protection is the rate limiter, not this.
+function corsHeaders(origin) {
+  if (!isAllowedOrigin(origin)) {
+    return { 'Vary': 'Origin' };
+  }
+  return {
+    'Access-Control-Allow-Origin':  origin,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Vary':                         'Origin',
+  };
+}
+
+async function checkRateLimit(request, env) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const { success } = await env.OCR_RATE_LIMITER.limit({ key: ip });
+  return success;
+}
+
+function jsonError(message, status, headers) {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' },
+  });
+}
 
 export default {
   async fetch(request, env) {
+    const origin  = request.headers.get('Origin') || '';
+    const headers = corsHeaders(origin);
 
-    // ── CORS preflight
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin':  '*',
-          'Access-Control-Allow-Methods': 'POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-        }
-      });
+      return new Response(null, { headers });
     }
 
-    // ── Only accept POST to /ocr
     const url = new URL(request.url);
     if (request.method !== 'POST' || url.pathname !== '/ocr') {
-      return new Response('Not found', { status: 404 });
+      return new Response('Not found', { status: 404, headers });
     }
 
-    // ── Parse incoming body: { image: base64string, mediaType: 'image/jpeg' }
+    const allowedRequest = await checkRateLimit(request, env);
+    if (!allowedRequest) {
+      return jsonError('Too many requests. Please wait a bit and try again.', 429, headers);
+    }
+
     let body;
     try {
       body = await request.json();
     } catch {
-      return jsonError('Invalid JSON body', 400);
+      return jsonError('Invalid JSON body', 400, headers);
     }
 
     if (!body.image || !body.mediaType) {
-      return jsonError('Missing image or mediaType', 400);
+      return jsonError('Missing image or mediaType', 400, headers);
     }
 
-    // ── Basic size guard (base64 string — 4MB base64 ≈ 3MB image)
+    // base64 length guard — 5.5M base64 chars ≈ 4MB image
     if (body.image.length > 5_500_000) {
-      return jsonError('Image too large. Please use a photo under 4MB.', 413);
+      return jsonError('Image too large. Please use a photo under 4MB.', 413, headers);
     }
 
-    // ── Forward to Anthropic
     let anthropicRes;
     try {
       anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -65,8 +106,8 @@ export default {
                 source: {
                   type:       'base64',
                   media_type: body.mediaType,
-                  data:       body.image
-                }
+                  data:       body.image,
+                },
               },
               {
                 type: 'text',
@@ -78,40 +119,26 @@ For GUARANTEED ANALYSIS: extract every row with its value and unit (%, ppm, IU/l
 For INGREDIENTS: list them in the exact order shown, comma-separated.
 For FEEDING DIRECTIONS: extract the full text.
 
-Do not add commentary or any text not on the label. If the image is too blurry or the label is not visible, respond with exactly: UNREADABLE`
-              }
-            ]
-          }]
-        })
+Do not add commentary or any text not on the label. If the image is too blurry or the label is not visible, respond with exactly: UNREADABLE`,
+              },
+            ],
+          }],
+        }),
       });
     } catch (err) {
-      return jsonError('Failed to reach Anthropic API: ' + err.message, 502);
+      return jsonError('Failed to reach Anthropic API: ' + err.message, 502, headers);
     }
 
-    // ── Pass Anthropic response back to client
     const data = await anthropicRes.json();
 
     if (!anthropicRes.ok) {
       const msg = data?.error?.message || 'Anthropic API error ' + anthropicRes.status;
-      return jsonError(msg, anthropicRes.status);
+      return jsonError(msg, anthropicRes.status, headers);
     }
 
     return new Response(JSON.stringify(data), {
       status: 200,
-      headers: {
-        'Content-Type':                 'application/json',
-        'Access-Control-Allow-Origin':  '*',
-      }
+      headers: { ...headers, 'Content-Type': 'application/json' },
     });
-  }
+  },
 };
-
-function jsonError(message, status) {
-  return new Response(JSON.stringify({ error: message }), {
-    status,
-    headers: {
-      'Content-Type':                'application/json',
-      'Access-Control-Allow-Origin': '*',
-    }
-  });
-}
