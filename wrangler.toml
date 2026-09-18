@@ -3,6 +3,26 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 account_id = "be3392b6f5b8a1eb187da0577987a019"
 
-[vars]
-# ANTHROPIC_API_KEY is set via: wrangler secret put ANTHROPIC_API_KEY
-# Do NOT put the actual key here
+# ANTHROPIC_API_KEY is a secret, set out of band and NOT stored here:
+#   wrangler secret put ANTHROPIC_API_KEY
+# Secrets survive `wrangler deploy` and must never be committed.
+
+# Rate limiting binding. This MUST stay declared here — it was previously
+# configured only in the Cloudflare dashboard, so a `wrangler deploy` from
+# this repo would silently drop it and leave the endpoint unprotected.
+#
+# namespace_id is an account-scoped integer you define yourself (Cloudflare's
+# own docs use "1001" as the example value). Bindings that share a
+# namespace_id share counters, including across Workers on this account — do
+# not reuse 1001 elsewhere without intending shared limits.
+#
+# simple.period must be either 10 or 60. No other value is accepted.
+#
+# Requires Wrangler 4.36.0 or later.
+[[ratelimits]]
+name = "OCR_RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 5
+  period = 60
