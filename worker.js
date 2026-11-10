@@ -44,6 +44,23 @@ async function checkRateLimit(request, env) {
   return success;
 }
 
+const ALLOWED_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+// Check the decoded leading bytes match the claimed type. Returns false for
+// anything that is not a real JPEG / PNG / WebP.
+function magicMatches(mediaType, b64) {
+  let bytes;
+  try {
+    bytes = atob(b64.slice(0, 24));
+  } catch {
+    return false;
+  }
+  if (mediaType === 'image/jpeg') return bytes.startsWith('\xFF\xD8\xFF');
+  if (mediaType === 'image/png')  return bytes.startsWith('\x89PNG\r\n\x1A\n');
+  if (mediaType === 'image/webp') return bytes.startsWith('RIFF') && bytes.slice(8, 12) === 'WEBP';
+  return false;
+}
+
 function jsonError(message, status, headers) {
   return new Response(JSON.stringify({ error: message }), {
     status,
@@ -77,13 +94,21 @@ export default {
       return jsonError('Invalid JSON body', 400, headers);
     }
 
-    if (!body.image || !body.mediaType) {
+    if (!body || typeof body.image !== 'string' || typeof body.mediaType !== 'string' || !body.image || !body.mediaType) {
       return jsonError('Missing image or mediaType', 400, headers);
+    }
+
+    if (!ALLOWED_MEDIA_TYPES.has(body.mediaType)) {
+      return jsonError('Unsupported image type. Please use a JPEG, PNG or WebP photo.', 415, headers);
     }
 
     // base64 length guard — 5.5M base64 chars ≈ 4MB image
     if (body.image.length > 5_500_000) {
       return jsonError('Image too large. Please use a photo under 4MB.', 413, headers);
+    }
+
+    if (!magicMatches(body.mediaType, body.image)) {
+      return jsonError('That file is not a valid image of the type declared.', 400, headers);
     }
 
     let anthropicRes;
