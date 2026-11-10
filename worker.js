@@ -171,13 +171,15 @@ export default {
               },
               {
                 type: 'text',
-                text: `This is a photo of a horse feed label. Extract ALL text from this label as accurately as possible.
+                text: `This is a photo of a horse feed label. Extract ALL printed text from this label as accurately as possible.
 
-Return ONLY the extracted text, structured exactly as it appears on the label. Preserve section headers (GUARANTEED ANALYSIS, INGREDIENTS, FEEDING DIRECTIONS) and their formatting.
+Return ONLY the extracted text, as plain text. Do NOT use markdown: no asterisks, no pound signs, no horizontal rules, no tables, no bullet symbols, no dot leaders. Put each section header (GUARANTEED ANALYSIS, INGREDIENTS, FEEDING DIRECTIONS) on its own line, with its content on the lines below.
 
-For GUARANTEED ANALYSIS: extract every row with its value and unit (%, ppm, IU/lb, mg/lb, etc.).
-For INGREDIENTS: list them in the exact order shown, comma-separated.
+For GUARANTEED ANALYSIS: one row per line: the nutrient name, then min or max if shown, then the value and unit exactly as printed (%, ppm, IU/lb, mg/lb, etc.). Keep leading decimals as printed (for example .25%, not 0.25% or 25%).
+For INGREDIENTS: write "INGREDIENTS:" on its own line, then the list in the exact order shown, comma-separated.
 For FEEDING DIRECTIONS: extract the full text.
+
+Transcribe numbers, dates and lot codes exactly as printed. If a character is hard to read, write [?] in its place instead of guessing; never infer or correct a digit or a year. If part of the label is covered by a redaction bar or cannot be read, write [unreadable] at that spot.
 
 Do not add commentary or any text not on the label. If the image is too blurry or the label is not visible, respond with exactly: UNREADABLE`,
               },
