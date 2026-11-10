@@ -9,6 +9,7 @@
  * Bindings (configured in Cloudflare, must not be dropped on deploy):
  *   ANTHROPIC_API_KEY  secret_text
  *   OCR_RATE_LIMITER   ratelimit — 5 requests / 60s, keyed on client IP
+ *   TURNSTILE_SECRET_KEY  secret_text — Cloudflare Turnstile (invisible) secret
  */
 
 const ALLOWED_ORIGINS = new Set([
@@ -61,6 +62,37 @@ function magicMatches(mediaType, b64) {
   return false;
 }
 
+const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+
+// Verify the single-use Turnstile token. Fails CLOSED: if the secret is
+// missing or siteverify is unreachable, the scan is refused.
+// Returns null when OK, otherwise a Response to send back.
+async function verifyTurnstile(token, request, env, headers) {
+  if (!env.TURNSTILE_SECRET_KEY) {
+    return jsonError('Verification is not configured. Please try again later.', 503, headers);
+  }
+  if (typeof token !== 'string' || token.length < 10 || token.length > 2048) {
+    return jsonError('Verification failed. Please reload the page and try again.', 403, headers);
+  }
+  let result;
+  try {
+    const form = new FormData();
+    form.append('secret', env.TURNSTILE_SECRET_KEY);
+    form.append('response', token);
+    const ip = request.headers.get('CF-Connecting-IP');
+    if (ip) form.append('remoteip', ip);
+    const res = await fetch(SITEVERIFY_URL, { method: 'POST', body: form });
+    if (!res.ok) throw new Error('siteverify ' + res.status);
+    result = await res.json();
+  } catch (err) {
+    return jsonError('Verification is temporarily unavailable. Please try again in a moment.', 503, headers);
+  }
+  if (!result.success) {
+    return jsonError('Verification failed. Please reload the page and try again.', 403, headers);
+  }
+  return null;
+}
+
 function jsonError(message, status, headers) {
   return new Response(JSON.stringify({ error: message }), {
     status,
@@ -110,6 +142,9 @@ export default {
     if (!magicMatches(body.mediaType, body.image)) {
       return jsonError('That file is not a valid image of the type declared.', 400, headers);
     }
+
+    const turnstileFailure = await verifyTurnstile(body.turnstileToken, request, env, headers);
+    if (turnstileFailure) return turnstileFailure;
 
     let anthropicRes;
     try {
